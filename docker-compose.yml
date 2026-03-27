@@ -6,3 +6,6 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env          # injects GROQ_API_KEY and other vars at runtime — never baked into the image
+    restart: unless-stopped   # auto-restart on crash, stop only on explicit docker compose down

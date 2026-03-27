@@ -17,6 +17,9 @@ The LLM occasionally generated dates like `2026-02-29` (Feb has no 29th in 2026)
 **Second LLM call looping**
 After receiving the tool result, the model kept trying to call another tool instead of answering in plain text. Fixed with `tool_choice="none"` on the second API call, forcing a text response.
 
+**Llama model stringifying array tool arguments**
+When `customer_ids` was defined as `"type": "array"` in the tool schema, Llama 4 Scout consistently serialized it as a JSON string (`"[39, 5, 50, 40]"`) instead of a proper array. Groq's schema validator then rejected the call with a `tool_use_failed` error before it could reach the client. Fixed by changing the schema type to `"type": "string"` (so Groq accepts the stringified value) and then parsing it back to a Python list in `_call_api()` with `json.loads()` before sending to FastAPI. The FastAPI endpoint and connector were unaffected — they still receive and process a proper `List[int]`.
+
 **Windows encoding errors**
 The terminal couldn't render Unicode box-drawing characters (`─`, `═`). Replaced all with ASCII equivalents (`-`, `=`).
 
@@ -43,6 +46,15 @@ Each JSON file is wrapped in `{"last_updated": "...", "records": [...]}`. The `_
 
 **Connector abstraction**
 Connectors add a layer over what is currently just JSON reads. For this project they're mostly demonstrating separation of concerns — the real value shows up when swapping sources (JSON → Postgres, REST API). Only the connector changes; the router, models, and business logic stay untouched.
+
+**Voice-optimized responses via system prompt**
+The system prompt instructs the LLM to answer in natural spoken English — no markdown, no bullet points, one or two sentences — so the output is suitable for a voice/call interface without any post-processing. The alternative (stripping markdown after the fact) is fragile because it needs to anticipate every formatting pattern the model might use. Controlling the output format at the prompt level is more reliable.
+
+**Session-scoped conversation memory**
+The `messages` list is initialized once per session in `main()` with the system prompt and passed into every `ask()` call. Each turn appends the user question and assistant answer, so follow-up questions like "who are they?" resolve correctly using prior context. When the session ends (quit or Ctrl+C), the list is discarded — matching the stateless-per-call model of a real IVR system. No database or external store is needed.
+
+**Multi-customer ID filtering**
+`get_support_tickets` now accepts a `customer_ids` list instead of a single `customer_id`. The connector converts the list to a `set` before filtering, giving O(1) per-record lookup regardless of how many IDs are passed. This matters at scale: scanning 100k tickets against a 50-ID set is the same cost as scanning against a 1-ID set. The router accepts repeated query params (`?customer_ids=39&customer_ids=5`) which FastAPI automatically parses as `List[int]`.
 
 **Pydantic models defined but not enforced at the connector level**
 The repo defines `Customer`, `Metric`, and `Ticket` Pydantic models, but the connectors return raw `List[Dict]` — the models are never called to validate incoming records. Pydantic is only enforced at the FastAPI response boundary (`DataResponse`). For this project's controlled, static JSON files this is acceptable: the data is trusted and read-only, so a bad record is unlikely. In a production system, connectors should parse each record through `model_validate()` at the point data enters the application — a `ValidationError` there is far easier to debug than a `KeyError` deep in business logic. The only practical reasons to skip connector-level validation are extreme batch-processing scale (where per-record overhead matters) or legacy codebases where retrofitting is deferred. Neither applies here; it was a scope shortcut.

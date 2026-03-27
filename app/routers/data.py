@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Query, HTTPException
 
@@ -104,12 +104,12 @@ def get_support_tickets(
         description="Filter by priority: high | medium | low | all",
         pattern="^(high|medium|low|all)$",
     ),
-    customer_id: Optional[int] = Query(None, description="Filter by customer ID"),
+    customer_ids: Optional[List[int]] = Query(None, description="Filter by one or more customer IDs"),
     limit: int = Query(10, ge=1, le=50, description="Max records to return"),
 ):
     connector = SupportConnector()
     try:
-        raw = connector.fetch(status=status, priority=priority, customer_id=customer_id)
+        raw = connector.fetch(status=status, priority=priority, customer_ids=customer_ids)
     except FileNotFoundError:
         logger.error("Support data file not found: %s", SUPPORT_DATA_PATH)
         raise HTTPException(status_code=503, detail="Support ticket data is currently unavailable.")

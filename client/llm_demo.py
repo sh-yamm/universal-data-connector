@@ -51,10 +51,12 @@ def _system_prompt() -> str:
     # Inject today's date so the LLM can resolve "last 7 days" → actual YYYY-MM-DD range.
     # Without this, the model sends literal strings like "last 7 days" as date params.
     return (
-        f"You are a concise business intelligence assistant. Today's date is {today}. "
+        f"You are a voice assistant for a business intelligence system. Today's date is {today}. "
         "Use the provided tools to answer questions about customers, "
         "support tickets, and analytics metrics. "
-        "Always cite the numbers you get from the data. "
+        "Always answer in natural spoken English — as if speaking on a phone call. "
+        "Never use bullet points, markdown, asterisks, or lists. "
+        "Keep answers to one or two sentences and always include the key number or fact. "
         "When calling tools that accept dates, always convert relative dates "
         f"(e.g. 'last 7 days', 'this month') to absolute ISO dates (YYYY-MM-DD) based on today ({today})."
     )
@@ -81,6 +83,14 @@ def _call_api(function_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if not url:
         return {"error": f"Unknown function: {function_name}"}
 
+    # Llama models stringify array args (e.g. "[39, 5]") — parse back to a real list
+    # so httpx sends ?customer_ids=39&customer_ids=5 which FastAPI reads as List[int]
+    if "customer_ids" in arguments and isinstance(arguments["customer_ids"], str):
+        try:
+            arguments["customer_ids"] = json.loads(arguments["customer_ids"])
+        except (json.JSONDecodeError, ValueError):
+            pass
+
     # Strip None values — FastAPI treats missing params as "no filter", not null
     params = {k: v for k, v in arguments.items() if v is not None}
 
@@ -96,20 +106,21 @@ def _call_api(function_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"error": "Cannot connect to FastAPI server. Is it running on localhost:8000?"}
 
 
-def ask(question: str, client: OpenAI, verbose: bool = True) -> str:
+def ask(question: str, client: OpenAI, messages: list, verbose: bool = True) -> str:
     """
     Send a question through the full function-calling loop and return the
     final natural-language answer.
+
+    `messages` is the session-scoped conversation history — callers own it and
+    pass it in so context accumulates across questions within a session.
     """
     if verbose:
         print(f"\n{'-' * 60}")
         print(f"  Q: {question}")
         print("-" * 60)
 
-    messages = [
-        {"role": "system", "content": _system_prompt()},
-        {"role": "user", "content": question},
-    ]
+    # Append this turn's user message to the shared session history
+    messages.append({"role": "user", "content": question})
 
     # --- Step 1: let the LLM decide which tool to call ---
     # tool_choice="auto" means the model can pick a tool or answer directly.
@@ -203,6 +214,9 @@ def ask(question: str, client: OpenAI, verbose: bool = True) -> str:
     if verbose:
         print(f"\n  A: {answer}")
 
+    # Persist the assistant's answer into session history so the next question has context
+    messages.append({"role": "assistant", "content": answer})
+
     return answer
 
 
@@ -217,6 +231,9 @@ def main() -> None:
 
     client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
 
+    # Session-scoped conversation history — initialized once, cleared on exit (like a call)
+    messages = [{"role": "system", "content": _system_prompt()}]
+
     print("=" * 60)
     print("  Universal Data Connector - LLM Demo")
     print("=" * 60)
@@ -224,7 +241,7 @@ def main() -> None:
     # If a question was passed on the command line, answer it and exit
     if len(sys.argv) > 1:
         question = " ".join(sys.argv[1:])
-        ask(question, client)
+        ask(question, client, messages)
         return
 
     print("\nDemo questions:")
@@ -250,18 +267,18 @@ def main() -> None:
 
         if user_input == "":
             for q in DEMO_QUESTIONS:
-                ask(q, client)
+                ask(q, client, messages)
             break
 
         if user_input.isdigit():
             idx = int(user_input) - 1
             if 0 <= idx < len(DEMO_QUESTIONS):
-                ask(DEMO_QUESTIONS[idx], client)
+                ask(DEMO_QUESTIONS[idx], client, messages)
             else:
                 print(f"Please enter a number between 1 and {len(DEMO_QUESTIONS)}.")
             continue
 
-        ask(user_input, client)
+        ask(user_input, client, messages)
 
 
 if __name__ == "__main__":

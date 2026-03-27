@@ -16,7 +16,7 @@ class SupportConnector(BaseConnector):
         self,
         status: Optional[str] = None,
         priority: Optional[str] = None,
-        customer_id: Optional[int] = None,
+        customer_ids: Optional[List[int]] = None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
         # Load tickets — JSON is wrapped in {"last_updated": ..., "records": [...]}
@@ -34,9 +34,10 @@ class SupportConnector(BaseConnector):
             tickets = [t for t in tickets if t["priority"] == priority]
             logger.info("After priority filter (%s): %d tickets", priority, len(tickets))
 
-        # Used when someone asks "show me tickets for customer #5"
-        if customer_id is not None:
-            tickets = [t for t in tickets if t["customer_id"] == customer_id]
-            logger.info("After customer_id filter (%d): %d tickets", customer_id, len(tickets))
+        # Supports single or multiple customer IDs — used for cross-customer queries
+        if customer_ids:
+            id_set = set(customer_ids)
+            tickets = [t for t in tickets if t["customer_id"] in id_set]
+            logger.info("After customer_ids filter %s: %d tickets", customer_ids, len(tickets))
 
         return tickets

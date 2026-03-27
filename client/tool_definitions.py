@@ -64,9 +64,12 @@ TOOLS = [
                         "enum": ["high", "medium", "low", "all"],
                         "description": "Filter tickets by priority level.",
                     },
-                    "customer_id": {
-                        "type": "integer",
-                        "description": "Return only tickets for this customer ID.",
+                    "customer_ids": {
+                        "type": "string",
+                        "description": (
+                            "Return only tickets for these customer IDs. "
+                            "Pass as a JSON array string, e.g. '[39, 5, 50]'."
+                        ),
                     },
                     "limit": {
                         "type": "integer",

@@ -2,26 +2,19 @@
 
 ## Challenges Faced & Solutions
 
-**LLM provider failures**
-OpenAI's free tier no longer gives credits to new accounts — both original and new keys failed immediately. Switched to Gemini, which hit regional restrictions (India's free tier returns `limit: 0`). Finally settled on Groq, which is free and globally available, using the OpenAI-compatible SDK with just a `base_url` swap.
+**LLM provider failures** — OpenAI free tier gave no credits; Gemini hit India regional restrictions (`limit: 0`). Settled on Groq (free, globally available) using the OpenAI-compatible SDK with a `base_url` swap.
 
-**Model tool-use reliability**
-`llama-3.3-70b-versatile` intermittently returned `tool_use_failed` errors with malformed JSON in tool calls. `llama3-groq-70b` and `mixtral-8x7b` were both decommissioned mid-project. Resolved by switching to `meta-llama/llama-4-scout-17b-16e-instruct` (Llama 4 Scout) and adding a one-retry loop for transient failures.
+**Model tool-use reliability** — `llama-3.3-70b-versatile` returned intermittent `tool_use_failed` errors; `llama3-groq-70b` and `mixtral-8x7b` were decommissioned mid-project. Switched to Llama 4 Scout and added a one-retry loop for transient failures.
 
-**LLM sending relative dates**
-When asked "last 7 days", the model sent the literal string as a date param instead of converting it. Fixed by injecting today's date into the system prompt and explicitly instructing the model to convert relative dates to ISO format before calling tools.
+**LLM sending relative dates** — Model passed literal strings like "last 7 days" as date params. Fixed by injecting today's date into the system prompt with an explicit instruction to convert relative dates to ISO format before calling tools.
 
-**Hallucinated invalid dates**
-The LLM occasionally generated dates like `2026-02-29` (Feb has no 29th in 2026). Added `_clamp_date()` in the analytics connector to salvage the year-month and clamp to the real last day of the month.
+**Hallucinated invalid dates** — Model occasionally generated dates like `2026-02-29`. Added `_clamp_date()` in the analytics connector to clamp to the real last day of the month.
 
-**Second LLM call looping**
-After receiving the tool result, the model kept trying to call another tool instead of answering in plain text. Fixed with `tool_choice="none"` on the second API call, forcing a text response.
+**Second LLM call looping** — After receiving the tool result, the model kept issuing more tool calls instead of answering. Fixed with `tool_choice="none"` on the second API call.
 
-**Llama model stringifying array tool arguments**
-When `customer_ids` was defined as `"type": "array"` in the tool schema, Llama 4 Scout consistently serialized it as a JSON string (`"[39, 5, 50, 40]"`) instead of a proper array. Groq's schema validator then rejected the call with a `tool_use_failed` error before it could reach the client. Fixed by changing the schema type to `"type": "string"` (so Groq accepts the stringified value) and then parsing it back to a Python list in `_call_api()` with `json.loads()` before sending to FastAPI. The FastAPI endpoint and connector were unaffected — they still receive and process a proper `List[int]`.
+**Llama stringifying array arguments** — With `"type": "array"` in the tool schema, Llama 4 Scout serialized `customer_ids` as a JSON string (`"[39, 5, 50]"`), which Groq's validator rejected. Worked around by changing the schema type to `"type": "string"` and parsing it back with `json.loads()` in `_call_api()` before forwarding to FastAPI.
 
-**Windows encoding errors**
-The terminal couldn't render Unicode box-drawing characters (`─`, `═`). Replaced all with ASCII equivalents (`-`, `=`).
+**Windows encoding errors** — Terminal couldn't render Unicode box-drawing characters. Replaced with ASCII equivalents.
 
 ---
 
@@ -33,7 +26,9 @@ Letting the LLM pick the tool costs extra tokens per request and is sensitive to
 A rule-based router (keyword matching or regex on the question) would cut latency roughly in half by eliminating the first LLM call entirely, and would reduce token cost proportionally. For a production system with predictable query patterns, that's the right tradeoff. However, this project is specifically scoped to demonstrate LLM function calling — routing via the LLM is the point of the exercise, not an oversight.
 
 **Two LLM calls per question**
-Call 1 decides which tool to call; Call 2 generates the answer. This doubles latency and token cost compared to a single call, but is necessary — without `tool_choice="none"` on Call 2, the model attempts another tool call instead of writing an answer.
+Call 1 decides which tool to call; Call 2 generates the answer. Within this project, both calls are intentional: the first demonstrates LLM function calling (the core scope), and `tool_choice="none"` on the second forces a text response instead of another tool call loop.
+
+In a production system, Call 1 could be replaced entirely by logic-based routing — keyword matching or a classifier that maps the question to a tool without hitting the LLM at all. That eliminates the first call's latency and cost. Call 2 (answer generation) still needs the LLM. So the realistic production pattern is one LLM call per question, not two. The two-call design here is a scope choice to keep function calling as the demonstration mechanism, not an architectural necessity.
 
 **Filtering in Python, not at the source**
 The connectors load the full JSON and filter in memory. Simple and correct for small datasets, but won't scale. With a real database, the filter would be pushed into the query itself — for example, `SELECT * FROM customers WHERE status = 'active' LIMIT 10` — so the database returns only matching rows and Python never loads the rest. The connector abstraction makes this swap clean: only the connector's `fetch()` changes; the router, business rules, and LLM layer stay untouched. The current Python filtering is essentially a JSON limitation — JSON has no query engine.
